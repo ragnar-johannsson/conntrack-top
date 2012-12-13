@@ -1,0 +1,75 @@
+#!/bin/bash
+#
+# A script that summarizes the top source and destination addresses
+# in the netfilter conntrack table, for TCP and UDP.
+#
+# Note: awk should be the perfect candidate for a task such as this.
+# However, due to arrays not being first class citizens in awk and
+# the lack of an associative array sort function that doesn't destroy
+# all associations, the result is a bit cumbersome. But it works.
+#
+
+if [ ! -e /proc/net/nf_conntrack ]; then
+    /bin/echo "Unable to find /proc/net/nf_conntrack"
+    exit 1
+fi
+
+TOP=10
+COUNT=$(/sbin/sysctl net.netfilter.nf_conntrack_count|awk '{print $3}')
+MAX=$(/sbin/sysctl net.netfilter.nf_conntrack_max|awk '{print $3}')
+
+/usr/bin/awk -v top=$TOP -v count=$COUNT -v max=$MAX '
+$3=="tcp" {
+    split($7, a, "=");
+    split($8, b, "=");
+    tcp_src[a[2]] += 1;
+    tcp_dst[b[2]] += 1;
+}
+
+$3=="udp" {
+    split($6, a, "=");
+    split($7, b, "=");
+    udp_src[a[2]] += 1;
+    udp_dst[b[2]] += 1;
+}
+
+function sort(arr, num) {
+    for (i = 0; i < num; i++) {
+        key = "";
+        high = 0;
+
+        for (k in arr) {
+            if ((arr[k]+0) > high && length(k) > 1) {
+                high = arr[k]+0;
+                key = k;
+            }
+        }
+
+        arr[i] = key " " high;
+        delete arr[key];
+    }
+}
+
+END {
+    sort(tcp_src, top);
+    sort(tcp_dst, top);
+    sort(udp_src, top);
+    sort(udp_dst, top);
+
+    printf("\nConnection count: %6s\nConnections max:  %6s\n", count, max);
+    printf("\nTop TCP\n%-17s%6s    %-17s%6s\n", "Source", "Num", "Destination", "Num");
+    for (i = 0; i < top; i++) {
+        split(tcp_src[i], src, " ");
+        split(tcp_dst[i], dst, " ");
+        printf("%-17s%6s    %-17s%6s\n", src[1], src[2], dst[1], dst[2]);
+    } 
+
+    printf("\nTop UDP\n%-17s%6s    %-17s%6s\n", "Source", "Num", "Destination", "Num");
+    for (i = 0; i < top; i++) {
+        split(udp_src[i], src, " ");
+        split(udp_dst[i], dst, " ");
+        printf("%-17s%6s    %-17s%6s\n", src[1], src[2], dst[1], dst[2]);
+    }
+
+    printf("\n");
+}' < /proc/net/nf_conntrack
